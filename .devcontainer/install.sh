@@ -15,52 +15,54 @@ rm -rf /tmp/xray.zip /tmp/xray_dist
 
 echo "✅ Xray installed successfully!"
 
-# Generate a random UUID (RFC 4122 v4)
+# Generate UUID
 UUID=$(cat /proc/sys/kernel/random/uuid)
-
 echo "🔑 Generated UUID: $UUID"
-
-# Patch config.json with the new UUID
 sed -i "s/__UUID__/$UUID/" /etc/config.json
 
-# Write startup script that prints all VLESS configs
+# Generate ShortID (8 hex chars)
+SHORTID=$(openssl rand -hex 8)
+echo "🔑 Generated ShortID: $SHORTID"
+sed -i "s/__SHORTID__/$SHORTID/" /etc/config.json
+
+# Write print-configs script
 cat > /usr/local/bin/print-configs.sh << SCRIPT
 #!/bin/sh
 UUID=\$(grep -o '"id": *"[^"]*"' /etc/config.json | grep -o '[0-9a-f-]\{36\}')
+SHORTID=\$(grep -o '"shortIds": *\["[^"]*"' /etc/config.json | grep -o '[0-9a-f]\{16\}')
+PUBKEY="Uce_P50Gr2cwmwe4CRbF9XOMWPMqDHjNC7F5fSItmxI"
 SNI="\${CODESPACE_NAME}-443.app.github.dev"
 IRAN_TIME=\$(TZ='Asia/Tehran' date +'%H:%M')
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🚀 G-Tunnel VLESS CONFIGS"
+echo "🎮 G-Tunnel REALITY CONFIGS"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "vless://\${UUID}@63.141.252.203:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown US1 - \${IRAN_TIME}"
+echo "vless://\${UUID}@63.141.252.203:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce US1 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@142.54.178.211:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown US2 - \${IRAN_TIME}"
+echo "vless://\${UUID}@142.54.178.211:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce US2 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@204.12.196.34:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown US3 - \${IRAN_TIME}"
+echo "vless://\${UUID}@204.12.196.34:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce US3 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@50.7.87.2:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown DE1 - \${IRAN_TIME}"
+echo "vless://\${UUID}@50.7.87.2:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce DE1 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@50.7.87.5:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown DE2 - \${IRAN_TIME}"
+echo "vless://\${UUID}@50.7.87.5:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce DE2 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@50.7.87.4:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown DE3 - \${IRAN_TIME}"
+echo "vless://\${UUID}@50.7.87.4:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce DE3 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@138.201.54.122:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown DE4 - \${IRAN_TIME}"
+echo "vless://\${UUID}@138.201.54.122:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce DE4 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@94.130.50.12:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown DE5 - \${IRAN_TIME}"
+echo "vless://\${UUID}@94.130.50.12:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce DE5 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@94.130.13.19:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown DE6 - \${IRAN_TIME}"
+echo "vless://\${UUID}@94.130.13.19:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce DE6 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@50.7.87.3:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown DE7 - \${IRAN_TIME}"
+echo "vless://\${UUID}@50.7.87.3:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce DE7 - \${IRAN_TIME}"
 echo ""
-echo "vless://\${UUID}@85.10.207.48:443?encryption=none&security=tls&type=ws&sni=\${SNI}&path=%2Flive-chat#@Subioir DarkForce&LifeisBrown DE8 - \${IRAN_TIME}"
+echo "vless://\${UUID}@85.10.207.48:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=yahoo.com&pbk=\${PUBKEY}&sid=\${SHORTID}&fp=chrome#@Subioir DarkForce DE8 - \${IRAN_TIME}"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 SCRIPT
 
 chmod +x /usr/local/bin/print-configs.sh
-
-# Print configs right now (only once at the end of installation)
 /usr/local/bin/print-configs.sh
