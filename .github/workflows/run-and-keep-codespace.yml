@@ -26,27 +26,53 @@ jobs:
           sudo apt update
           sudo apt install gh -y
 
-      - name: Auth with GitHub CLI
+      - name: Auth with GitHub CLI (Smart Auth)
+        id: auth_step
         run: |
-          echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
-          gh auth status
+          if [ -n "${{ secrets.PAT_TOKEN }}" ]; then
+            echo "✅ PAT_TOKEN found in secrets. Logging in using token..."
+            echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
+            gh auth status
+          else
+            echo "⚠️ PAT_TOKEN is missing! Switching to Interactive Device Web Flow..."
+            echo "--------------------------------------------------------"
+            echo "Please look at the output below, copy the code, and open:"
+            echo "https://github.com/login/device"
+            echo "--------------------------------------------------------"
+            
+            # این دستور ۵ دقیقه (300 ثانیه) منتظر ورود کد توسط شما می‌ماند
+            timeout 300 gh auth login --web --scopes "repo,codespace,workflow" || {
+              echo "❌ Authentication timeout or failed after 5 minutes."
+              exit 1
+            }
+            
+            echo "✅ Device Authentication Successful!"
+            gh auth status
+          fi
+
+      # ساخت کلید SSH موقت برای ارتباط بدون دردسر Actions با Codespace
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+          gh ssh-key add ~/.ssh/id_ed25519.pub --title "Actions-Codespace-Key"
 
       - name: Create codespace
         id: create_cs
         run: |
           echo "Creating codespace from ${{ github.repository }}..."
           
+          # استفاده از سوییچ های json و jq برای دریافت صرفاً نام تمیز کداسپیس
           CS_NAME=$(gh codespace create \
             --repo ${{ github.repository }} \
             --branch main \
             --machine basicLinux32gb \
             --display-name "gg-tunnel-run-$(date +%Y%m%d-%H%M%S)" \
             --idle-timeout 30m \
-            --retention-period 1d)
+            --retention-period 1d \
+            --json name --jq '.name')
           
-          echo "Raw output: $CS_NAME"
-          
-          if [[ "$CS_NAME" == *"error"* ]]; then
+          if [ -z "$CS_NAME" ] || [[ "$CS_NAME" == *"error"* ]]; then
             echo "Failed to create codespace"
             exit 1
           fi
@@ -54,56 +80,58 @@ jobs:
           echo "cs_name=$CS_NAME" >> $GITHUB_OUTPUT
           echo "Codespace created: $CS_NAME"
 
-      - name: Wait for codespace ready
+      - name: Wait for codespace initialization
         run: |
-          echo "Waiting for codespace to be ready..."
-          sleep 120
+          echo "Waiting 90 seconds for devcontainer features to boot up..."
+          sleep 90
 
-      - name: Get codespace name
-        id: get_cs
+      - name: Monitor devcontainer logs and wait for completion
         run: |
-          CS=$(gh codespace list --json name --jq '.[0].name' 2>/dev/null)
-          echo "cs_name=$CS" >> $GITHUB_OUTPUT
-          echo "Using codespace: $CS"
+          CS="${{ steps.create_cs.outputs.cs_name }}"
+          echo "Connecting to $CS to check creation logs..."
+          
+          # بررسی وضعیت لود شدن کانتینر برای اطمینان از اجرای کامل اسکریپت‌ها
+          for i in {1..15}; do
+            STATUS=$(gh codespace ssh -c "$CS" -- bash -c "cat /workspaces/.codespaces/.proxy/vscodeserver/creation.log 2>/dev/null | grep -i 'creation' | tail -1" || true)
+            echo "Checking setup status... Attempt $i"
+            sleep 20
+          done
 
-      - name: Wait for script to finish
+      - name: Capture terminal logs & application output
         run: |
-          echo "Waiting for auto-script to complete..."
-          sleep 180
-
-      - name: Capture terminal logs
-        run: |
-          CS="${{ steps.get_cs.outputs.cs_name }}"
+          CS="${{ steps.create_cs.outputs.cs_name }}"
           
           if [ -z "$CS" ]; then
             echo "No codespace found"
             exit 1
           fi
           
+          # بررسی جامع تمام مسیرهایی که ممکن است لاگ ابزار شما در آن ذخیره یا چاپ شود
           gh codespace ssh -c "$CS" -- bash -c '
             echo "=== TERMINAL OUTPUT ==="
-            echo ""
             
-            echo "--- Bash History ---"
-            if [ -f "$HOME/.bash_history" ]; then
-              tail -300 "$HOME/.bash_history"
+            # ۱. بررسی فایل‌های لاگ احتمالی در محیط ورک‌اسپیس
+            if [ -d "/workspaces" ]; then
+               find /workspaces -type f -name "*.log" -exec echo "--- File: {} ---" \; -exec cat {} \;
             fi
             
-            echo ""
-            echo "--- VS Code Logs ---"
+            # ۲. بررسی لاگ‌های سرور داخلی VS Code
             if [ -d "$HOME/.vscode-remote/data/logs" ]; then
-              LOG_DIR=$(ls -td $HOME/.vscode-remote/data/logs/*/ 2>/dev/null | head -1)
-              if [ -n "$LOG_DIR" ]; then
-                cat "$LOG_DIR"/*.log 2>/dev/null | tail -500
-              fi
+              find $HOME/.vscode-remote/data/logs/ -type f -name "*.log" -exec cat {} \;
             fi
+            
+            # ۳. بررسی پروسس‌های فعال سیستم (به عنوان زاپاس برای دیدن وضعیت اجرای تونل)
+            ps aux
           ' 2>&1 | tee terminal_full_output.log
 
       - name: Extract config
         run: |
+          # پیدا کردن عبارت کلیدی و بریدن لاگ از آن خط تا انتهای فایل
           if grep -q "G-Tunnel GAMING CONFIGS" terminal_full_output.log; then
-            grep -A 500 "G-Tunnel GAMING CONFIGS" terminal_full_output.log > Config.txt
+            echo "Target config found! Extracting..."
+            sed -n '/G-Tunnel GAMING CONFIGS/,$p' terminal_full_output.log > Config.txt
           else
+            echo "Target config pattern not found in logs. Saving full logs to Config.txt for debugging."
             cat terminal_full_output.log > Config.txt
           fi
 
@@ -112,23 +140,21 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add Config.txt
-          git commit -m "Update Config.txt" || true
-          git push || true
+          git commit -m "Update Config.txt [skip ci]" || true
+          git push origin main || true
 
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs
-          path: |
-            *.log
-            Config.txt
-          retention-days: 7
-
-      - name: Cleanup
+      - name: Cleanup Remote SSH Key
         if: always()
         run: |
-          CS="${{ steps.get_cs.outputs.cs_name }}"
+          # حذف کلید SSH ساخته شده از روی اکانت گیت‌هاب جهت حفظ امنیت
+          FP=$(ssh-keygen -l -f ~/.ssh/id_ed25519.pub | awk '{print $2}')
+          gh ssh-key delete $(gh ssh-key list | grep "$FP" | awk '{print $1}') -y || true
+
+      - name: Cleanup Codespace
+        if: always()
+        run: |
+          CS="${{ steps.create_cs.outputs.cs_name }}"
           if [ -n "$CS" ]; then
+            echo "Deleting codespace: $CS"
             gh codespace delete -c "$CS" --force || true
           fi
