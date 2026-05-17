@@ -1,41 +1,35 @@
-name: Run Script in DevContainer Codespace and Keep It Alive
+name: Auto Run GG-Tunnel and Save Config
 
 on:
   workflow_dispatch:
-    inputs:
-      script_to_run:
-        description: 'Script or command to run in terminal'
-        required: true
-        default: 'bash start.sh'
-        type: string
 
 jobs:
-  run-in-codespace-no-delete:
-    name: Run in Codespace (No Deletion)
+  auto-run-codespace:
+    name: Auto Run GG-Tunnel in Codespace
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       codespaces: write
       actions: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - name: Clone repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create new codespace with devcontainer
+      - name: Create codespace
         id: create_cs
         run: |
-          echo "Creating codespace from repository ${{ github.repository }} ..."
+          echo "Creating codespace from ${{ github.repository }}..."
           
           CS_OUTPUT=$(gh codespace create \
             --repo ${{ github.repository }} \
             --branch main \
             --machine basicLinux32gb \
-            --display-name "my-app-$(date +%Y%m%d-%H%M%S)" \
-            --idle-timeout 60m \
-            --retention-period 7d)
+            --display-name "gg-tunnel-auto-$(date +%Y%m%d-%H%M%S)" \
+            --idle-timeout 30m \
+            --retention-period 1d)
           
           CS_NAME=$(echo "$CS_OUTPUT" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
           
@@ -44,192 +38,152 @@ jobs:
             CS_NAME=$(gh codespace list --json name,createdAt --jq 'sort_by(.createdAt) | last(.[]).name')
           fi
           
-          echo "Codespace created: $CS_NAME"
           echo "cs_name=$CS_NAME" >> $GITHUB_OUTPUT
-          
-          echo "Waiting for devcontainer to be ready (90 seconds)..."
-          sleep 90
+          echo "Codespace created: $CS_NAME"
 
-      - name: Get codespace information
-        id: cs_info
+      - name: Wait for VS Code and auto-script to complete
+        run: |
+          echo "Waiting for VS Code to fully load and auto-script to run..."
+          echo "This may take 2-5 minutes depending on the script"
+          sleep 120
+          
+          echo "Waiting additional 60 seconds for script completion..."
+          sleep 60
+
+      - name: Capture terminal output from VS Code
+        id: capture_output
         run: |
           CS="${{ steps.create_cs.outputs.cs_name }}"
           
-          CS_URL=$(gh codespace view -c "$CS" --json webUrl --jq '.webUrl')
-          echo "cs_url=$CS_URL" >> $GITHUB_OUTPUT
-          
-          echo "Codespace URL:"
-          echo "$CS_URL"
-          
-          gh codespace view -c "$CS"
-
-      - name: Execute script in codespace terminal
-        id: run_script
-        run: |
-          CS="${{ steps.create_cs.outputs.cs_name }}"
-          SCRIPT="${{ github.event.inputs.script_to_run }}"
-          
+          echo "Capturing terminal output from VS Code..."
           echo "========================================="
-          echo "Executing in codespace: $SCRIPT"
-          echo "========================================="
+          
+          gh codespace ssh -c "$CS" -- bash << 'EOF' 2>&1 | tee terminal_full_output.log
+          
+          echo "=== CAPTURING VS CODE TERMINAL OUTPUT ==="
           echo ""
           
-          gh codespace ssh -c "$CS" -- bash -l -c "
-            echo 'Current directory: ' \$(pwd)
-            echo 'Environment: ' \$(cat /etc/os-release | grep PRETTY_NAME | cut -d'\"' -f2)
-            echo 'Directory contents:'
-            ls -la
-            echo ''
-            echo 'Script output:'
-            echo '=== START OF TERMINAL OUTPUT ==='
-            cd /workspaces/${{ github.repository.name }}
-            $SCRIPT
-            echo '=== END OF TERMINAL OUTPUT ==='
-          " 2>&1 | tee terminal_full_output.log
+          echo "--- Bash History (commands run in terminal) ---"
+          if [ -f "$HOME/.bash_history" ]; then
+            tail -500 "$HOME/.bash_history"
+          fi
           
-          echo "script_output<<EOF" >> $GITHUB_OUTPUT
-          cat terminal_full_output.log >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Capture VS Code terminal logs
-        id: capture_terminal_logs
-        run: |
-          CS="${{ steps.create_cs.outputs.cs_name }}"
-          
-          echo "Extracting VS Code terminal logs..."
-          
-          gh codespace ssh -c "$CS" -- bash << 'EOF' 2>&1 | tee vscode_terminal_raw.log
-          
-          echo "========================================="
-          echo "VS Code Terminal Logs"
-          echo "========================================="
           echo ""
-          
-          echo "--- VS Code PtyHost Log (Terminal Output) ---"
+          echo "--- VS Code PtyHost Log (live terminal session) ---"
           PTY_LOG=$(find $HOME/.vscode-remote/data/logs -name "ptyhost*.log" 2>/dev/null | head -1)
           if [ -n "$PTY_LOG" ]; then
             echo "File: $PTY_LOG"
-            echo "------------------"
-            cat "$PTY_LOG" 2>/dev/null | tail -500
-          else
-            echo "ptyhost log not found, checking other logs..."
+            cat "$PTY_LOG" 2>/dev/null
           fi
           
           echo ""
-          echo "--- VS Code Renderer Log (includes terminal) ---"
+          echo "--- VS Code Renderer Log ---"
           RENDERER_LOG=$(find $HOME/.vscode-remote/data/logs -name "renderer*.log" 2>/dev/null | head -1)
           if [ -n "$RENDERER_LOG" ]; then
-            echo "File: $RENDERER_LOG"
-            echo "------------------"
-            grep -i "terminal\|pty\|command" "$RENDERER_LOG" 2>/dev/null | tail -200
+            cat "$RENDERER_LOG" 2>/dev/null
           fi
           
           echo ""
-          echo "--- Terminal Command History ---"
-          if [ -f "$HOME/.bash_history" ]; then
-            echo "Bash history:"
-            tail -200 "$HOME/.bash_history"
-          elif [ -f "$HOME/.zsh_history" ]; then
-            echo "Zsh history:"
-            tail -200 "$HOME/.zsh_history"
-          fi
-          
-          echo ""
-          echo "--- DevContainer Build Log ---"
-          if [ -f "/workspaces/.codespaces/.build.log" ]; then
-            echo "Last 100 lines of build log:"
-            tail -100 "/workspaces/.codespaces/.build.log"
-          fi
-          
-          echo ""
-          echo "--- Running Terminal Processes ---"
-          ps aux | grep -E "bash|zsh|node|python" | grep -v grep
+          echo "--- Workspace directory contents ---"
+          ls -la /workspaces/${{ github.repository.name }}
           
 EOF
-          
-          echo "Terminal logs saved"
 
-      - name: Generate complete execution report
+      - name: Extract GG-Tunnel config from terminal output
+        id: extract_config
         run: |
-          CS="${{ steps.create_cs.outputs.cs_name }}"
+          echo "Extracting GG-Tunnel configuration..."
+          
+          if grep -q "G-Tunnel GAMING CONFIGS" terminal_full_output.log; then
+            echo "Found G-Tunnel GAMING CONFIGS in logs"
+            grep -A 500 "G-Tunnel GAMING CONFIGS" terminal_full_output.log | head -500 > config_extracted.txt
+          elif grep -q "GG-Tunnel" terminal_full_output.log; then
+            echo "Found GG-Tunnel related content"
+            grep -A 300 "GG-Tunnel" terminal_full_output.log > config_extracted.txt
+          else
+            echo "No specific config found, saving full terminal output"
+            cat terminal_full_output.log > config_extracted.txt
+          fi
+
+      - name: Save Config.txt to repository root
+        run: |
+          echo "Saving configuration to Config.txt"
           
           {
-            echo "========================================="
-            echo "Complete Execution Report"
-            echo "========================================="
+            echo "========================================"
+            echo "GG-Tunnel Configuration"
+            echo "Extracted from Codespace Terminal"
+            echo "========================================"
             echo "Date: $(date)"
             echo "Repository: ${{ github.repository }}"
-            echo "Codespace: $CS"
-            echo "Executed command: ${{ github.event.inputs.script_to_run }}"
+            echo "Codespace: ${{ steps.create_cs.outputs.cs_name }}"
+            echo "========================================"
             echo ""
-            echo "========================================="
-            echo "Script Output"
-            echo "========================================="
-            cat terminal_full_output.log
-            echo ""
-            echo "========================================="
-            echo "VS Code Raw Terminal Logs"
-            echo "========================================="
-            cat vscode_terminal_raw.log
-          } > complete_execution_report.txt
+            cat config_extracted.txt
+          } > Config.txt
+          
+          echo ""
+          echo "Config.txt saved with $(wc -l Config.txt) lines"
 
-      - name: Upload logs (codespace remains active)
+      - name: Get codespace URL
+        id: cs_info
+        run: |
+          CS="${{ steps.create_cs.outputs.cs_name }}"
+          CS_URL=$(gh codespace view -c "$CS" --json webUrl --jq '.webUrl')
+          echo "cs_url=$CS_URL" >> $GITHUB_OUTPUT
+          echo "Codespace URL: $CS_URL"
+
+      - name: Commit and push Config.txt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add Config.txt
+          git commit -m "Update Config.txt from auto-run [skip ci]" || echo "No changes to commit"
+          git push origin main || git push origin master || echo "Push failed"
+
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: terminal-logs-from-codespace
+          name: gg-tunnel-complete-logs
           path: |
             *.log
             *.txt
+            Config.txt
           retention-days: 30
 
-      - name: Display codespace access link
+      - name: Show summary
+        if: always()
         run: |
-          echo "========================================="
-          echo "Script execution completed successfully!"
-          echo "========================================="
-          echo ""
-          echo "Codespace is still active and accessible at:"
-          echo "  ${{ steps.cs_info.outputs.cs_url }}"
-          echo ""
-          echo "Log files saved:"
-          echo "  - terminal_full_output.log (Full script output)"
-          echo "  - vscode_terminal_raw.log (Raw VS Code logs)"
-          echo "  - complete_execution_report.txt (Complete report)"
-          echo ""
-          echo "Download logs from Artifacts section."
-          echo ""
-          
           {
-            echo "## Execution Complete - Codespace Kept Alive"
+            echo "## GG-Tunnel Auto Execution Complete"
             echo ""
-            echo "### Access Codespace"
-            echo "[Click here to open codespace](${{ steps.cs_info.outputs.cs_url }})"
+            echo "### Config File"
+            echo "Config.txt has been saved to the repository root"
             echo ""
-            echo "### Executed Command"
-            echo '```bash'
-            echo "${{ github.event.inputs.script_to_run }}"
+            echo "### Codespace (Still Active)"
+            echo "[Open Codespace](${{ steps.cs_info.outputs.cs_url }})"
+            echo ""
+            echo "### Config Content Preview"
+            echo '```'
+            head -100 Config.txt
             echo '```'
             echo ""
-            echo "### Script Output (Last 200 lines)"
-            echo '```bash'
-            tail -200 terminal_full_output.log 2>/dev/null || echo "No output available"
-            echo '```'
-            echo ""
-            echo "### Download Logs"
-            echo "Full logs available in **Artifacts** section:"
-            echo "- `terminal-logs-from-codespace.zip`"
+            echo "### Download Full Logs"
+            echo "Download artifact: \`gg-tunnel-complete-logs\`"
           } >> $GITHUB_STEP_SUMMARY
 
-      - name: Display terminal output
+      - name: Keep codespace alive
+        if: always()
         run: |
+          echo "========================================="
+          echo "Codespace is still active!"
+          echo "========================================="
           echo ""
-          echo "========================================="
-          echo "Terminal Output:"
-          echo "========================================="
+          echo "URL: ${{ steps.cs_info.outputs.cs_url }}"
           echo ""
-          cat terminal_full_output.log
+          echo "The codespace will remain active for 30 minutes of idle time"
+          echo "or 1 day retention period."
           echo ""
-          echo "========================================="
-          echo "End of Output"
-          echo "========================================="
+          echo "Config.txt has been saved to the repository."
