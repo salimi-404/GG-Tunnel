@@ -1,0 +1,247 @@
+name: Run Script in DevContainer Codespace & Keep It Alive
+
+on:
+  workflow_dispatch:
+    inputs:
+      script_to_run:
+        description: 'اسکریپت یا دستوری که باید در ترمینال اجرا شود'
+        required: true
+        default: 'bash start.sh'
+        type: string
+
+jobs:
+  run-in-codespace-no-delete:
+    name: 🚀 اجرا در کداسپیس (بدون حذف)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      codespaces: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: 1️⃣ کلون مخزن
+        uses: actions/checkout@v4
+
+      - name: 2️⃣ ساخت کداسپیس جدید (با دواکانتینر شما)
+        id: create_cs
+        run: |
+          echo "✨ در حال ساخت کداسپیس از مخزن ${{ github.repository }} ..."
+          
+          # ساخت کداسپیس با استفاده از devcontainer موجود در مخزن
+          CS_OUTPUT=$(gh codespace create \
+            --repo ${{ github.repository }} \
+            --branch main \
+            --machine basicLinux32gb \
+            --display-name "my-app-$(date +%Y%m%d-%H%M%S)" \
+            --idle-timeout 60m \
+            --retention-period 7d)
+          
+          # استخراج نام کداسپیس
+          CS_NAME=$(echo "$CS_OUTPUT" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
+          
+          if [ -z "$CS_NAME" ]; then
+            # روش جایگزین: گرفتن آخرین کداسپیس ساخته شده
+            sleep 10
+            CS_NAME=$(gh codespace list --json name,createdAt --jq 'sort_by(.createdAt) | last(.[]).name')
+          fi
+          
+          echo "✅ کداسپیس ساخته شد: $CS_NAME"
+          echo "cs_name=$CS_NAME" >> $GITHUB_OUTPUT
+          
+          # صبر برای آماده شدن کامل دواکانتینر و VS Code
+          echo "⏳ منتظر آماده شدن کامل دواکانتینر (90 ثانیه)..."
+          sleep 90
+
+      - name: 3️⃣ دریافت اطلاعات کداسپیس
+        id: cs_info
+        run: |
+          CS="${{ steps.create_cs.outputs.cs_name }}"
+          
+          # دریافت URL کداسپیس
+          CS_URL=$(gh codespace view -c "$CS" --json webUrl --jq '.webUrl')
+          echo "cs_url=$CS_URL" >> $GITHUB_OUTPUT
+          
+          echo "🌐 کداسپیس در آدرس زیر در دسترس است:"
+          echo "$CS_URL"
+          
+          # نمایش وضعیت
+          gh codespace view -c "$CS"
+
+      - name: 4️⃣ اجرای اسکریپت در ترمینال کداسپیس
+        id: run_script
+        run: |
+          CS="${{ steps.create_cs.outputs.cs_name }}"
+          SCRIPT="${{ github.event.inputs.script_to_run }}"
+          
+          echo "========================================="
+          echo "▶️ در حال اجرا در کداسپیس: $SCRIPT"
+          echo "========================================="
+          echo ""
+          
+          # اجرای دستور در داخل کداسپیس و ذخیره کامل لاگ ترمینال
+          gh codespace ssh -c "$CS" -- bash -l -c "
+            echo '📍 مسیر فعلی: ' \$(pwd)
+            echo '🐳 محیط: ' \$(cat /etc/os-release | grep PRETTY_NAME | cut -d'\"' -f2)
+            echo '📁 محتویات دایرکتوری:'
+            ls -la
+            echo ''
+            echo '🚀 خروجی اسکریپت شما:'
+            echo '=== START OF TERMINAL OUTPUT ==='
+            cd /workspaces/${{ github.repository.name }}
+            $SCRIPT
+            echo '=== END OF TERMINAL OUTPUT ==='
+          " 2>&1 | tee terminal_full_output.log
+          
+          # ذخیره خروجی برای مرحله بعد
+          echo "script_output<<EOF" >> $GITHUB_OUTPUT
+          cat terminal_full_output.log >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 5️⃣ گرفتن لاگ‌های کامل ترمینال از VS Code
+        id: capture_terminal_logs
+        run: |
+          CS="${{ steps.create_cs.outputs.cs_name }}"
+          
+          echo "📋 در حال استخراج لاگ‌های ترمینال از VS Code..."
+          
+          # گرفتن تمام لاگ‌های مربوط به ترمینال
+          gh codespace ssh -c "$CS" -- bash << 'EOF' 2>&1 | tee vscode_terminal_raw.log
+          
+          echo "========================================="
+          echo "لاگ‌های ترمینال VS Code"
+          echo "========================================="
+          echo ""
+          
+          # 1. لاگ مستقیم ترمینال از VS Code
+          echo "--- لاگ خروجی ترمینال VS Code (ptyhost) ---"
+          PTY_LOG=$(find $HOME/.vscode-remote/data/logs -name "ptyhost*.log" 2>/dev/null | head -1)
+          if [ -n "$PTY_LOG" ]; then
+            echo "فایل: $PTY_LOG"
+            echo "------------------"
+            cat "$PTY_LOG" 2>/dev/null | tail -500
+          else
+            echo "لاگ ptyhost یافت نشد، بررسی لاگ‌های دیگر..."
+          fi
+          
+          echo ""
+          echo "--- لاگ رندرر VS Code (شامل ترمینال) ---"
+          RENDERER_LOG=$(find $HOME/.vscode-remote/data/logs -name "renderer*.log" 2>/dev/null | head -1)
+          if [ -n "$RENDERER_LOG" ]; then
+            echo "فایل: $RENDERER_LOG"
+            echo "------------------"
+            grep -i "terminal\|pty\|command" "$RENDERER_LOG" 2>/dev/null | tail-200
+          fi
+          
+          echo ""
+          echo "--- تاریخچه کامل دستورات ترمینال ---"
+          if [ -f "$HOME/.bash_history" ]; then
+            echo "Bash history:"
+            tail -200 "$HOME/.bash_history"
+          elif [ -f "$HOME/.zsh_history" ]; then
+            echo "Zsh history:"
+            tail -200 "$HOME/.zsh_history"
+          fi
+          
+          echo ""
+          echo "--- لاگ کانتینر (دواکانتینر) ---"
+          if [ -f "/workspaces/.codespaces/.build.log" ]; then
+            echo "آخرین خطوط build log:"
+            tail -100 "/workspaces/.codespaces/.build.log"
+          fi
+          
+          echo ""
+          echo "--- پروسه‌های در حال اجرا در ترمینال ---"
+          ps aux | grep -E "bash|zsh|node|python" | grep -v grep
+          
+EOF
+          
+          echo "✅ لاگ‌های ترمینال ذخیره شد"
+
+      - name: 6️⃣ گرفتن خروجی کامل از جلسه ترمینال
+        run: |
+          CS="${{ steps.create_cs.outputs.cs_name }}"
+          
+          # ایجاد یک لاگ جامع از همه چیز
+          {
+            echo "========================================="
+            echo "گزارش کامل اجرا در کداسپیس"
+            echo "========================================="
+            echo "تاریخ: $(date)"
+            echo "مخزن: ${{ github.repository }}"
+            echo "کداسپیس: $CS"
+            echo "دستور اجرا شده: ${{ github.event.inputs.script_to_run }}"
+            echo ""
+            echo "========================================="
+            echo "خروجی اصلی اسکریپت"
+            echo "========================================="
+            cat terminal_full_output.log
+            echo ""
+            echo "========================================="
+            echo "لاگ‌های خام VS Code (ترمینال)"
+            echo "========================================="
+            cat vscode_terminal_raw.log
+          } > complete_execution_report.txt
+
+      - name: 7️⃣ آپلود لاگ‌ها (کداسپیس نگهداری می‌شود)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-logs-from-codespace
+          path: |
+            *.log
+            *.txt
+          retention-days: 30
+
+      - name: 8️⃣ نمایش لینک دسترسی به کداسپیس
+        run: |
+          echo "========================================="
+          echo "✅ اسکریپت با موفقیت اجرا شد!"
+          echo "========================================="
+          echo ""
+          echo "🌐 کداسپیس همچنان فعال است و می‌توانید وارد آن شوید:"
+          echo "   ${{ steps.cs_info.outputs.cs_url }}"
+          echo ""
+          echo "📝 لاگ‌های ترمینال در فایل‌های زیر ذخیره شده‌اند:"
+          echo "   - terminal_full_output.log (خروجی کامل اسکریپت)"
+          echo "   - vscode_terminal_raw.log (لاگ‌های خام VS Code)"
+          echo "   - complete_execution_report.txt (گزارش جامع)"
+          echo ""
+          echo "⬇️ برای دانلود لاگ‌ها، از بخش Artifacts استفاده کنید."
+          echo ""
+          
+          # اضافه کردن به GitHub Summary
+          {
+            echo "## ✅ اجرا کامل شد - کداسپیس نگهداری می‌شود"
+            echo ""
+            echo "### 🌐 دسترسی به کداسپیس"
+            echo "[کلیک کنید تا وارد کداسپیس شوید](${{ steps.cs_info.outputs.cs_url }})"
+            echo ""
+            echo "### 📝 دستور اجرا شده"
+            echo '```bash'
+            echo "${{ github.event.inputs.script_to_run }}"
+            echo '```'
+            echo ""
+            echo "### 📄 خروجی اسکریپت (۲۰۰ خط آخر)"
+            echo '```bash'
+            tail -200 terminal_full_output.log 2>/dev/null || echo "خروجی موجود نیست"
+            echo '```'
+            echo ""
+            echo "### 📥 دانلود لاگ‌ها"
+            echo "فایل‌های کامل در بخش **Artifacts** قابل دانلود هستند:"
+            echo "- \`terminal-logs-from-codespace.zip\`"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: 9️⃣ نمایش لاگ ترمینال در خروجی
+        run: |
+          echo ""
+          echo "========================================="
+          echo "خروجی ترمینال اسکریپت شما:"
+          echo "========================================="
+          echo ""
+          cat terminal_full_output.log
+          echo ""
+          echo "========================================="
+          echo "پایان خروجی"
+          echo "========================================="
