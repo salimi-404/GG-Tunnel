@@ -58,8 +58,7 @@ jobs:
           echo "Capturing terminal output from VS Code..."
           echo "========================================="
           
-          gh codespace ssh -c "$CS" -- bash << 'EOF' 2>&1 | tee terminal_full_output.log
-          
+          gh codespace ssh -c "$CS" -- bash -c '
           echo "=== CAPTURING VS CODE TERMINAL OUTPUT ==="
           echo ""
           
@@ -86,8 +85,7 @@ jobs:
           echo ""
           echo "--- Workspace directory contents ---"
           ls -la /workspaces/${{ github.repository.name }}
-          
-EOF
+          ' 2>&1 | tee terminal_full_output.log
 
       - name: Extract GG-Tunnel config from terminal output
         id: extract_config
@@ -171,7 +169,7 @@ EOF
             echo '```'
             echo ""
             echo "### Download Full Logs"
-            echo "Download artifact: \`gg-tunnel-complete-logs\`"
+            echo "Download artifact: gg-tunnel-complete-logs"
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Keep codespace alive
